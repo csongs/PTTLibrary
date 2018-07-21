@@ -1796,7 +1796,7 @@ class Library(object):
             self.__ErrorCode = ErrorCode.UnknowError
             self.Log('content 與 LineNumber 長度不符')
             return ErrorCode.UnknowError
-   
+
         if LineNumber == [0]: 
             SendMessage = '\x14' # ctrl+T go to the very end
             ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
