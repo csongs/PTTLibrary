@@ -95,7 +95,9 @@ def GameDemo():
     CheckedLN = 0
     NotFinished = True
 
-    PTTBot.editArticle(Board, '\rStart!!!\r\r1+1=?\r\r', PostIndex=500)
+    ErrCode = PTTBot.editArticle(Board, '\rStart!!!\r\r1+1=?\r\r', PostIndex=PostIndex)
+    if ErrCode != PTT.ErrorCode.Success:
+        return ErrCode
 
     JustEdit = True
     
@@ -105,7 +107,7 @@ def GameDemo():
         
         ErrCode, Post = PTTBot.getPost('@'+Board, PostIndex=PostIndex, LineNumber=CheckedLN) # @記號代表此時已位於文章前
         if ErrCode != PTT.ErrorCode.Success:
-            PTTBot.Log('使用文章編號取得文章詳細資訊失敗 錯誤碼: ' + str(ErrCode))
+            return
         
         PList = Post.getPushList()
         
@@ -124,7 +126,9 @@ def GameDemo():
         for Push in PList:
             if Response[0] in Push.getContent():
                 
-                PTTBot.editArticle('@'+Board, [Response[1]]+ [None]*len(EditRecordLine), LineNumber=[Push.getLineNumber()] + EditRecordLine) # 編輯文章
+                ErrCode = PTTBot.editArticle('@'+Board, [Response[1]]+ [None]*len(EditRecordLine), LineNumber=[Push.getLineNumber()] + EditRecordLine) # 編輯文章
+                if ErrCode != PTT.ErrorCode.Success:
+                    return
                 CheckedLN = Push.getLineNumber() - len(EditRecordLine)
                 JustEdit = True
                 Response[0] = '**' + str(int(Response[0][2:])*2)

@@ -1767,6 +1767,9 @@ class Library(object):
         #              若 LineNumber=0 代表你想於文章底部修文。
         #            - content 與 LineNumber 可為 list，但注意兩者長度需相等
         #              代表你想在本次修文中執行多項作業： 於 LineNumber[i] 底下新增內容 content[i]
+        #              LineNumber 不需事先排序，本函數自己會呼叫。但裡頭的數值需唯一
+        #              若需要對於同一行做多次操作(刪除並新增文字取代之)，
+        #              有個 workaround 是在字串前面加上 '\x1BOA\x19' (ESC OA Ctrl+Y)，手動往上一行並刪除
         #            - 新增功能: content 的 entry 可為 None, 代表你想 "刪掉" 此行
 
         ConnectIndex = _ConnectIndex
@@ -1777,17 +1780,9 @@ class Library(object):
         else:
             ErrCode = self.gotoArticle(Board, PostID, PostIndex, _ConnectIndex, Search)
             if ErrCode != ErrorCode.Success:
-                return ErrCode, None
+                self.__ErrorCode = ErrCode
+                return ErrCode
 
-        self.Log('編輯文章前')
-        SendMessage = '\x03E'
-
-        ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
-        if ErrCode != ErrorCode.Success:
-            self.__ErrorCode = ErrCode
-            self.Log('進入編輯文章失敗')
-            return ErrCode
-        
         if type(content)!=list: # make it a list
             content = [content]
         if type(LineNumber)!=list:
@@ -1796,6 +1791,19 @@ class Library(object):
             self.__ErrorCode = ErrorCode.UnknowError
             self.Log('content 與 LineNumber 長度不符')
             return ErrorCode.UnknowError
+        if len(LineNumber) > len(set(LineNumber)):
+            self.__ErrorCode = ErrorCode.UnknowError
+            self.Log('LineNumber 包含重複行號')
+            return ErrorCode.UnknowError
+                
+        self.Log('編輯文章前')
+        SendMessage = '\x03E'
+
+        ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+        if ErrCode != ErrorCode.Success:
+            self.__ErrorCode = ErrCode
+            self.Log('進入編輯文章失敗')
+            return ErrCode
 
         if LineNumber == [0]: 
             SendMessage = '\x14' # ctrl+T go to the very end
@@ -1811,7 +1819,7 @@ class Library(object):
                 self.Log('編輯文章內容失敗')
                 return ErrCode
         else:
-            LineNumber,content =  zip(*sorted(zip(LineNumber,content), key = lambda k: k[0], reverse=True)) # 反向排序，多次編輯時可維持行號
+            LineNumber,content =  zip(*sorted(zip(LineNumber,content), key = lambda k: k[0], reverse=True)) # 反向排序，多項編輯時可維持行號
             # print(LineNumber,content)
             for editQuery in range(len(LineNumber)):
                 SendMessage = '\x1BL' + str(LineNumber[editQuery]) + '\r\x05' # ESC L 行號 Ctrl+E 至指定行尾
