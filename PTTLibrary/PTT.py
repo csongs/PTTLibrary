@@ -162,6 +162,7 @@ class Library(object):
         )
 
         self.__ErrorCode =                      ErrorCode.Success
+        self.__noBreakLineMode =                False # for noBreakLineMode()
     def __AntiLogout(self):
         
         self.__RunIdleThread = True
@@ -1190,7 +1191,7 @@ class Library(object):
         self.__ErrorCode = ErrCode
         return ErrCode
 
-    def getPost(self, Board, PostID='', PostIndex=0, _ConnectIndex=0, Search=''):
+    def getPost(self, Board, PostID='', PostIndex=0, _ConnectIndex=0, Search='', LineNumber=0):
         self.__IdleTime = 0
         
         ConnectIndex = _ConnectIndex
@@ -1233,7 +1234,7 @@ class Library(object):
         self.__APILock[ConnectIndex].acquire()
 
         for i in range(3):
-            ErrCode, Post = self.__getPost(Board, PostID, PostIndex, _ConnectIndex, Search)
+            ErrCode, Post = self.__getPost(Board, PostID, PostIndex, _ConnectIndex, Search, LineNumber)
             if ErrCode != ErrorCode.Success:
                 continue
             
@@ -1246,19 +1247,29 @@ class Library(object):
 
         self.__ErrorCode = ErrCode
         return ErrCode, Post
-    def __getPost(self, Board, PostID='', PostIndex=0, _ConnectIndex=0, Search=''):
-        
+
+    def __getPost(self, Board, PostID='', PostIndex=0, _ConnectIndex=0, Search='', LineNumber=0):
+        # commented by arthurduh1
+        # Comments : - 新增功能: Board 加上 '@' prefix 代表你宣稱此時爬蟲位於文章前、文章內部或其價格查詢頁面。
+        #              可以略過前進至文章的步驟
+        #            - 獨立出 "前進至文章" 的部分至 gotoArticle()
+        #            - 新增功能: LineNumber 參數代表你想從此行開始讀取文章(此行數採 PTT 顯示於底端的計算方式)
+        #              若 LineNumber=0 代表你想從頭讀整篇文章。
+        #              注意，從中途讀取的話，就無法分辨內文與推文區塊，PostContentList 會恆為 empty list。
+        #            - 新增功能: 將系統記錄(以 "※" 開頭者)納入推文 list，並增加 PushInformation 的行數屬性 (相關改動: Information.py)
+        #              由於需精確計算行數，增加 noBreakLineMode()。在此模式下過長行的內容會直接被砍掉。
+
         ConnectIndex = _ConnectIndex
         result = None
 
-        SendMessage = self.__gotoMainMenu + 'qs' + Board + '\r\x03\x03 '
-        # 前進至文章
-        if PostID != '':
-            SendMessage += '#' + PostID + '\rQ'
-        elif PostIndex != -1:
-            if Search != '':
-                SendMessage += '/' + Search + '\r'
-            SendMessage += str(PostIndex) + '\rQ'
+        if Board.startswith('@'): # 宣稱此時爬蟲位於文章前、文章內部或其價格查詢頁面
+            Board = Board[1:]
+        else:
+            ErrCode = self.gotoArticle(Board, PostID, PostIndex, _ConnectIndex, Search)
+            if ErrCode != ErrorCode.Success:
+                return ErrCode, None
+
+        SendMessage = '\x03Q'
         
         Refresh = True
         isBreakDetect = False
@@ -1402,7 +1413,18 @@ class Library(object):
         # self.Log('PostWeb: =' + PostWeb + '=')
         # self.Log('PostMoney: =' + str(PostMoney) + '=')
 
-        SendMessage = '\r\r'
+        SendMessage = '\x03'
+        ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+        if ErrCode != ErrorCode.Success:
+            self.Log('操作失敗 錯誤碼: ' + str(ErrCode), LogLevel.DEBUG)
+            self.__ErrorCode = ErrCode
+            return ErrCode, None
+            
+        ErrCode = self.noBreakLineMode(_ConnectIndex)
+        if ErrCode != ErrorCode.Success:
+            return ErrCode, None
+
+        SendMessage = '\r'
         
         Refresh = True
         isBreakDetect = False
@@ -1474,6 +1496,19 @@ class Library(object):
 
             if FirstPage == '':
                 FirstPage = self.__ReceiveData[ConnectIndex]
+                if LineNumber > 0: 
+                    SendMessage = ':' + str(LineNumber+1) + '\r'
+                    LastPageIndex = LineNumber-1
+                    PageIndex = -1
+                    isFirstPage = False
+                    LineNumberOffset = LineNumber
+                    ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+                    if ErrCode != ErrorCode.Success:
+                        self.Log('操作失敗 錯誤碼: ' + str(ErrCode), LogLevel.DEBUG)
+                        self.__ErrorCode = ErrCode
+                        return ErrCode, None
+                else:
+                    LineNumberOffset = 5
                         
             for DetectTarget in DetectTargetList:
                 if DetectTarget.isMatch(self.__ReceiveData[ConnectIndex]):
@@ -1507,6 +1542,9 @@ class Library(object):
                         ErrCode = ErrorCode.HasControlCode
                         self.__ErrorCode = ErrCode
                         return ErrCode, None
+
+                    if PageIndex == -1: 
+                        PageIndex = int(PageLineRange[0])+1 # next page number
 
                     PageLineRange = list(map(int, PageLineRange))[-2:]
                     
@@ -1589,12 +1627,12 @@ class Library(object):
 
         PostContentList = []
         PostPushList = []
-        for line in PostContentListTemp:
+        for idx, line in enumerate(PostContentListTemp):
             # print('! ' + line)
-            if len(PostContentList) == 0:
+            if len(PostContentList) == 0 and LineNumber == 0:
                 # print('QQ: ' + str(PostIP))
-                if str(PostIP) in line:
-                    PostContentList = PostContentListTemp[:PostContentListTemp.index(line)]
+                if str(PostIP) in line: 
+                    PostContentList = PostContentListTemp[:idx]
             else:
                 while line.startswith(' '):
                     line = line[1:]
@@ -1607,29 +1645,47 @@ class Library(object):
                     CurrentPushType = PushType.Boo
                 elif line.startswith('→'):
                     CurrentPushType = PushType.Arrow
+                elif line.startswith('※ 編輯'):
+                    CurrentPushType = PushType.EditRecord
+                elif line.startswith('※'):
+                    CurrentPushType = PushType.OtherRecord
                 
                 if CurrentPushType != PushType.Unknow:
                     # print(line)
 
-                    PushAuthor = line
-                    PushAuthor = PushAuthor[2:]
-                    PushAuthor = PushAuthor[:PushAuthor.find(':')]
-                    while PushAuthor.endswith(' '):
-                        PushAuthor = PushAuthor[:-1]
-                    
-                    Target = ': '
-                    PushContent = line[:-11]
-                    PushContent = PushContent[PushContent.find(Target) + len(Target):]
-                    # PushContent = PushContent[:PushContent.find(' ')]
-                    while PushContent.endswith(' '):
-                        PushContent = PushContent[:-1]
+                    if CurrentPushType == PushType.EditRecord: 
+                        PushAuthor = line
+                        PushAuthor = PushAuthor[6:]
+                        PushAuthor = PushAuthor[:PushAuthor.find('(')]
+                        while PushAuthor.endswith(' '):
+                            PushAuthor = PushAuthor[:-1]
+                        PushContent = line[:-19]
+                        PushContent = PushContent[PushContent.find('(') + len(Target):]
+                        PushTime = line[-19:]
+                    elif CurrentPushType == PushType.OtherRecord:
+                        PushAuthor = "Undefined"
+                        PushContent = line
+                        PushTime = "Undefined"
+                    else:
+                        PushAuthor = line
+                        PushAuthor = PushAuthor[2:]
+                        PushAuthor = PushAuthor[:PushAuthor.find(':')]
+                        while PushAuthor.endswith(' '):
+                            PushAuthor = PushAuthor[:-1]
+                        
+                        Target = ': '
+                        PushContent = line[:-11]
+                        PushContent = PushContent[PushContent.find(Target) + len(Target):]
+                        # PushContent = PushContent[:PushContent.find(' ')]
+                        while PushContent.endswith(' '):
+                            PushContent = PushContent[:-1]
 
-                    PushTime = line[-11:]
-                    # print('PushAuthor: =' + PushAuthor + '=')
-                    # print('PushContent: =' + PushContent + '=')
-                    # print('PushTime: =' + PushTime + '=')
+                        PushTime = line[-11:]
+                        # print('PushAuthor: =' + PushAuthor + '=')
+                        # print('PushContent: =' + PushContent + '=')
+                        # print('PushTime: =' + PushTime + '=')
 
-                    CurrentPush = Information.PushInformation(CurrentPushType, PushAuthor, PushContent, PushTime)
+                    CurrentPush = Information.PushInformation(CurrentPushType, PushAuthor, PushContent, PushTime, idx+LineNumberOffset)
                     PostPushList.append(CurrentPush)
 
         PostContent = '\n'.join(PostContentList)
@@ -1643,6 +1699,169 @@ class Library(object):
         self.__WaterBallProceeor()
         self.__ErrorCode = ErrCode
         return ErrCode, result
+
+    def noBreakLineMode(self, _ConnectIndex=0): 
+        # by arthurduh1
+        # Function : 調整截行模式，避免單行過長而導致的行數計數錯誤。
+        # 初始位置 : 有效文章前、價格查詢
+        # 結束位置 : 該文章前
+        # Comment  : - PTT 每次連線之預設值為 "自動斷行"。
+        #              為求方便，將此函數整併進 __getPost() 函數，並以 __noBreakLineMode 記錄是否調整過。
+        #            - SendMessage 中第一個 \x03 是防呆字串，即使不是在文章前，而是在其價格查詢頁面
+        #              爬蟲即使不是在文章前，而是在其價格查詢頁面，此函數仍能發揮效用。
+        #              可進一步將其改為 \x03Q\x03，如此即使是在有效文章內部，仍會有效。但須付出一點點的連線流量作為代價。
+        ConnectIndex = _ConnectIndex
+        self.Log('調整截行模式')
+        
+        if self.__noBreakLineMode == True:
+            self.Log('模式已調整過', LogLevel.DEBUG)
+            
+            ErrCode = ErrorCode.Success
+            self.__ErrorCode = ErrCode
+            return ErrCode
+        
+        SendMessage = '\x03row\rq' # row!
+        CatchList = []
+        
+        ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, CatchTargetList=CatchList, Refresh=False)
+        if ErrCode != ErrorCode.Success:
+            self.Log('調整模式失敗')
+            self.__ErrorCode = ErrCode
+            return ErrCode
+        else:
+            self.Log('調整模式成功')
+            self.__noBreakLineMode = True
+
+    def gotoArticle(self, Board, PostID='', PostIndex=0, _ConnectIndex=0, Search=''):
+        ConnectIndex = _ConnectIndex
+        Refresh = True
+        self.Log('前往文章前', LogLevel.DEBUG)
+
+        SendMessage = self.__gotoMainMenu + 'qs' + Board + '\r\x03\x03 '
+        # 前進至文章
+        if PostID != '':
+            SendMessage += '#' + PostID + '\r'
+        elif PostIndex != -1:
+            if Search != '':
+                SendMessage += '/' + Search + '\r'
+            SendMessage += str(PostIndex) + '\r'
+
+        ErrCode, CatchIndex = self.__operatePTT(_ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+        self.Log('前往文章後', LogLevel.DEBUG)
+        if ErrCode != ErrorCode.Success:
+            self.Log('前往文章' + str(PostIndex) + '失敗')
+            self.__ErrorCode = ErrCode
+            return ErrCode
+        else:
+            self.Log('前往文章' + str(PostIndex) + '成功!!!')
+            
+            ErrCode = ErrorCode.Success
+            self.__ErrorCode = ErrCode
+            return ErrCode
+
+    def editArticle(self, Board, content, LineNumber=0, PostID='', PostIndex=0, _ConnectIndex=0, Search=''): 
+        # commented by arthurduh1
+        # Comments : - Board 加上 '@' prefix 代表你宣稱此時爬蟲位於文章前、文章內部或其價格查詢頁面。
+        #              可以略過前進至文章的步驟
+        #            - LineNumber 參數代表你想在此行 "底下" 修文(此行數採 PTT 顯示於底端的計算方式)
+        #              若 LineNumber=0 代表你想於文章底部修文。
+        #            - content 與 LineNumber 可為 list，但注意兩者長度需相等
+        #              代表你想在本次修文中執行多項作業： 於 LineNumber[i] 底下新增內容 content[i]
+        #            - 新增功能: content 的 entry 可為 None, 代表你想 "刪掉" 此行
+
+        ConnectIndex = _ConnectIndex
+        Refresh = False
+
+        if Board.startswith('@'): # 宣稱此時爬蟲位於文章前、文章內部或其價格查詢頁面
+            Board = Board[1:]
+        else:
+            ErrCode = self.gotoArticle(Board, PostID, PostIndex, _ConnectIndex, Search)
+            if ErrCode != ErrorCode.Success:
+                return ErrCode, None
+
+        self.Log('編輯文章前')
+        SendMessage = '\x03E'
+
+        ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+        if ErrCode != ErrorCode.Success:
+            self.__ErrorCode = ErrCode
+            self.Log('進入編輯文章失敗')
+            return ErrCode
+        
+        if type(content)!=list: # make it a list
+            content = [content]
+        if type(LineNumber)!=list:
+            LineNumber = [LineNumber]
+        if len(content) != len(LineNumber):
+            self.__ErrorCode = ErrorCode.UnknowError
+            self.Log('content 與 LineNumber 長度不符')
+            return ErrorCode.UnknowError
+   
+        if LineNumber == [0]: 
+            SendMessage = '\x14' # ctrl+T go to the very end
+            ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+            if ErrCode != ErrorCode.Success:
+                self.__ErrorCode = ErrCode
+                self.Log('到文章底部失敗')
+                return ErrCode
+            SendMessage = str(content[0])
+            ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+            if ErrCode != ErrorCode.Success:
+                self.__ErrorCode = ErrCode
+                self.Log('編輯文章內容失敗')
+                return ErrCode
+        else:
+            LineNumber,content =  zip(*sorted(zip(LineNumber,content), key = lambda k: k[0], reverse=True)) # 反向排序，多次編輯時可維持行號
+            # print(LineNumber,content)
+            for editQuery in range(len(LineNumber)):
+                SendMessage = '\x1BL' + str(LineNumber[editQuery]) + '\r\x05' # ESC L 行號 Ctrl+E 至指定行尾
+                ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+                if ErrCode != ErrorCode.Success:
+                    self.__ErrorCode = ErrCode
+                    self.Log('到文章指定行號失敗')
+                    return ErrCode
+
+                if content[editQuery] == None: 
+                    SendMessage = '\x19' # Ctrl+Y
+                else:
+                    SendMessage = '\r' + str(content[editQuery])
+                    
+                ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+                if ErrCode != ErrorCode.Success:
+                    self.__ErrorCode = ErrCode
+                    self.Log('編輯文章內容失敗')
+                    return ErrCode
+
+        self.Log('嘗試儲存文章', LogLevel.DEBUG)
+
+        SendMessage = '\x18' # Ctrl+X
+        CatchList = [
+            # 0
+            '確定要儲存檔案嗎',
+        ]
+        ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, CatchTargetList=CatchList, Refresh=Refresh)
+
+        if ErrCode != ErrorCode.Success:
+            self.__ErrorCode = ErrCode
+            self.Log('嘗試儲存編輯文章失敗')
+            return ErrCode
+
+        if CatchIndex == 0:
+            SendMessage = 's\r'
+            ErrCode, CatchIndex = self.__operatePTT(ConnectIndex, SendMessage=SendMessage, Refresh=Refresh)
+            if ErrCode != ErrorCode.Success:
+                self.__ErrorCode = ErrCode
+                self.Log('儲存失敗')
+                return ErrCode
+            self.Log('儲存檔案成功')
+            ErrCode = ErrorCode.Success
+            self.__ErrorCode = ErrCode
+            return ErrCode
+        else:
+            ErrCode = ErrorCode.UnknowError
+            self.__ErrorCode = ErrCode
+            self.Log('儲存編輯文章發生未知錯誤')
+            return ErrCode
 
     def mail(self, UserID, MailTitle, MailContent, SignType):
         self.__IdleTime = 0

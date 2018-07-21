@@ -96,6 +96,8 @@ def showPost(Post):
     PushCount = 0
     BooCount = 0
     ArrowCount = 0
+    ERCount = 0
+    ORCount = 0
 
     # open('Big5Data.txt',"wb").write(Post.getRawData())
 
@@ -106,13 +108,17 @@ def showPost(Post):
             BooCount += 1
         elif Push.getType() == PTT.PushType.Arrow:
             ArrowCount += 1
+        elif Push.getType() == PTT.PushType.EditRecord:
+            ERCount += 1
+        elif Push.getType() == PTT.PushType.OtherRecord:
+            ORCount += 1
         
         # Author = Push.getAuthor()
         # Content = Push.getContent()
         
         # print(Author + ': ' + Content)
         
-    PTTBot.Log('共有 ' + str(PushCount) + ' 推 ' + str(BooCount) + ' 噓 ' + str(ArrowCount) + ' 箭頭')
+    PTTBot.Log('共有 ' + str(PushCount) + ' 推 ' + str(BooCount) + ' 噓 ' + str(ArrowCount) + ' 箭頭 ' + str(ERCount) + ' 編輯紀錄 ' + str(ORCount) + ' 其他紀錄 ')
 
 def GetPostDemo():
     
@@ -670,6 +676,55 @@ def WaterBallHandler(WaterBall):
 
     PTTBot.throwWaterBall(WaterBall.getAuthor(), WaterBall.getAuthor() + ' 我接住你的水球了!')
 
+def GameDemo():
+    Board = 'Test' # 板名。請自行添增此兩參數
+    PostIndex = 500 # 文章編號
+    
+    Response = []
+    
+    CheckedLN = 0
+    NotFinished = True
+    
+    PTTBot.gotoBoard(Board)
+    PTTBot.gotoArticle(PostIndex)
+    
+    PTTBot.editArticle('\rStart!!!\r\r1+1=?\r')
+    JustEdit = True
+    
+    while NotFinished:
+
+        time.sleep(1)
+        
+        ErrCode, Post = PTTBot.getPost('@'+Board, PostIndex=PostIndex, LineNumber=CheckedLN) # @記號代表此時已位於文章前
+        if ErrCode != PTT.ErrorCode.Success:
+            PTTBot.Log('使用文章編號取得文章詳細資訊失敗 錯誤碼: ' + str(ErrCode))
+        
+        PList = Post.getPushList()
+        
+        if JustEdit:
+            EditRecordLine = [x.getLineNumber() for x in PList if x.getType() == PTT.PushType.EditRecord] # 抓出所有編輯記錄，下次編輯時一次砍除
+            JustEdit = False
+
+        if len(PList)>0: 
+            CheckedLN = PList[-1].getLineNumber()
+        PTTBot.Log('已檢查過 ' + str(CheckedLN) + '行')
+        
+        if Response == []: # 防止偷跑，掃過一輪再給答案
+            Response = ['**2', '\rRight!\r\rAns+Ans = ?\r']
+            continue
+        
+        for Push in PList:
+            if Response[0] in Push.getContent():
+                
+                PTTBot.editArticle([Response[1]]+ [None]*len(EditRecordLine), LineNumber=[Push.getLineNumber()] + EditRecordLine) # 編輯文章
+                CheckedLN = Push.getLineNumber() - len(EditRecordLine)
+                JustEdit = True
+                Response[0] = '**' + str(int(Response[0][2:])*2)
+                break
+                
+            elif 'END' in Push.getContent():
+                NotFinished = False
+
 if __name__ == '__main__':
     print('Welcome to PTT Library v ' + PTT.Version + ' Demo')
 
@@ -694,7 +749,7 @@ if __name__ == '__main__':
     # PTTBot = PTT.Library(ID, Password, _LogLevel=PTT.LogLevel.DEBUG)
     # Log 接收器，如果有需要把內部顯示抓出來的需求可以用這個
     # PTTBot = PTT.Library(ID, Password, LogHandler=LogHandler)
-    PTTBot = PTT.Library(ID, Password)
+    PTTBot = PTT.Library(ID, Password, kickOtherLogin=False, _LogLevel=PTT.LogLevel.DEBUG)
 
     ErrCode = PTTBot.login()
     if ErrCode != PTT.ErrorCode.Success:

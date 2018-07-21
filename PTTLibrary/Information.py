@@ -56,6 +56,8 @@ class PushType(object):
         self.Push =                         1
         self.Boo =                          2
         self.Arrow =                        3
+        self.EditRecord =                   4
+        self.OtherRecord =                  5
 
 class MailInformation(object):
     def __init__(self, Author, Title, Date, Content, IP, RawData):
@@ -115,11 +117,12 @@ class UserInformation(object):
         return self.__Chess
         
 class PushInformation(object):
-    def __init__(self, PushType, Author, PushContent, PushTime):
+    def __init__(self, PushType, Author, PushContent, PushTime, LineNumber):
         self.__Type = int(PushType)
         self.__Author = str(Author)
         self.__Content = str(PushContent)
         self.__Time = str(PushTime)
+        self.__LineNumber = int(LineNumber)
 
     def getType(self):
         return self.__Type
@@ -129,6 +132,8 @@ class PushInformation(object):
         return self.__Content
     def getTime(self):
         return self.__Time
+    def getLineNumber(self):
+        return self.__LineNumber
         
 class PostInformation(object):
     def __init__(self, Board, PostID, Author, Date, Title, WebUrl, Money, PostContent, IP, PushList, RawData):
